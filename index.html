@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Reliance Label Document</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --card: #ffffff;
+    --border: #e4e0da;
+    --text: #2b2620;
+    --muted: #857e73;
+    --accent: #c96442;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+  }
+  .card {
+    width: 100%;
+    max-width: 560px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p.sub { color: var(--muted); font-size: 14px; margin: 0 0 28px; line-height: 1.5; }
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  #dropzone:hover, #dropzone.drag { border-color: var(--accent); background: #fdf6f3; }
+  #dropzone .icon { font-size: 32px; margin-bottom: 10px; }
+  #dropzone .main-text { font-size: 15px; font-weight: 500; }
+  #dropzone .sub-text { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  input[type=file] { display: none; }
+  #status { margin-top: 20px; font-size: 14px; min-height: 20px; }
+  #status.error { color: #b3552f; }
+  #status.ok { color: #2f6b3a; }
+  .filename { display: inline-block; margin-top: 14px; font-size: 13px; color: var(--muted); word-break: break-all; }
+  footer { margin-top: 24px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Reliance Label Document</h1>
+    <p class="sub">Drop your PO export CSV below. Everything runs inside this page &mdash; nothing is uploaded anywhere, no internet connection required &mdash; and a formatted .xlsx downloads automatically.</p>
+
+    <div id="dropzone">
+      <div class="icon">📄</div>
+      <div class="main-text">Click to choose a file, or drag &amp; drop it here</div>
+      <div class="sub-text">Accepts the PO export .csv</div>
+      <input type="file" id="fileInput" accept=".csv" />
+    </div>
+
+    <div id="status"></div>
+
+    <footer>
+      Mapping: Format←Business Unit, garment po number←PO Number, supplier id←Vendor Code,
+      Color/Desc/Article Number parsed from Material Description, Yrmonth from Delivery Date.
+      Metsize, Label Type, Fashion grade (code), and usp are left blank (not present in the source export).
+    </footer>
+  </div>
+
+<script>
+/* ===================== UI wiring ===================== */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const statusEl = document.getElementById('status');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function setStatus(html, cls) {
+  statusEl.className = cls || '';
+  statusEl.innerHTML = html;
+}
+
+function handleFile(file) {
+  setStatus('<span class="spinner"></span>Reading ' + file.name + ' …');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const rows = parseCSV(e.target.result);
+      if (!rows.length) { setStatus('No data rows found in that CSV.', 'error'); return; }
+      setStatus('<span class="spinner"></span>Building formatted Excel (' + rows.length + ' rows) …');
+      setTimeout(() => {
+        try {
+          const zipBytes = buildXlsx(rows);
+          downloadFile(zipBytes, file.name, rows.length);
+        } catch (err) {
+          console.error(err);
+          setStatus('Failed to build Excel file: ' + err.message, 'error');
+        }
+      }, 10);
+    } catch (err) {
+      console.error(err);
+      setStatus('Failed to read file: ' + err.message, 'error');
+    }
+  };
+  reader.onerror = () => setStatus('Could not read that file.', 'error');
+  reader.readAsText(file);
+}
+
+function downloadFile(bytes, sourceName, rowCount) {
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const outName = sourceName.replace(/\.csv$/i, '') + '_Formatted.xlsx';
+  a.href = url;
+  a.download = outName || 'PO_Export_Dump.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setStatus('Done — downloaded <strong>' + outName + '</strong> (' + rowCount + ' rows).<br><span class="filename">Drop another file to run it again.</span>', 'ok');
+}
+
+/* ===================== CSV parsing (handles quoted fields with embedded commas) ===================== */
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      } else { field += ch; i++; continue; }
+    } else {
+      if (ch === '"') { inQuotes = true; i++; continue; }
+      if (ch === ',') { row.push(field); field = ''; i++; continue; }
+      if (ch === '\r') { i++; continue; }
+      if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+      field += ch; i++; continue;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  if (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === '') rows.pop();
+  if (!rows.length) return [];
+
+  // strip UTF-8 BOM from first header if present
+  if (rows[0][0]) rows[0][0] = rows[0][0].replace(/^﻿/, '');
+
+  const headers = rows[0];
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) obj[headers[c]] = rows[r][c];
+    out.push(obj);
+  }
+  return out;
+}
+
+/* ===================== Domain mapping (CSV columns -> template columns) ===================== */
+const HEADERS = [
+  "Format", "garment po number ", "supplier id ", "Vendor Name", "Style Code",
+  "Color", "Size", "Metsize", "Label Type", "Desc", "Yrmonth", "MRP", "EAN",
+  "Article Number", "tag Qty", "Segment", "Family", "Class", "Fashion grade",
+  "Fashion grade Desc", "usp"
+];
+const COLUMN_WIDTHS = [6.83, 17.16, 8.43, 36.66, 22.33, 17.16, 8.43, 10.0, 32.5, 33.66, 7.83, 17.16, 14.0, 17.16, 6.33, 17.16, 8.43, 14.83, 17.16, 8.43, 9.0];
+
+// Data cellXfs style index per 1-based column (matches the original template exactly):
+//   3 = plain (border only), 4 = integer "0", 5 = float "#,##0.00",
+//   6 = centered text, 7 = left/center (Metsize only), 8 = centered integer (tag Qty),
+//   9 = centered date "mm/yyyy" (Yrmonth)
+const COL_STYLE = {
+  1: 3, 2: 4, 3: 3, 4: 3, 5: 3, 6: 3,
+  7: 6, 8: 7, 9: 6, 10: 3, 11: 9, 12: 5, 13: 4, 14: 4,
+  15: 8, 16: 6, 17: 6, 18: 6, 19: 6, 20: 6, 21: 3
+};
+// Header style per 1-based column: all centered except the last column (U), which matches
+// the original template's un-centered header cell.
+const HEADER_STYLE = { 21: 2 };
+
+function parseMaterial(desc) {
+  desc = desc || '';
+  const parts = desc.split('_');
+  if (parts.length >= 4) {
+    return [parts[0].trim(), parts[3].split(',')[0].trim(), parts[2].trim()];
+  }
+  return [desc.trim(), '', ''];
+}
+function parseDeliveryDate(s) {
+  s = (s || '').trim();
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (!m) return null;
+  return { month: +m[2], year: +m[3] };
+}
+function excelSerialDate(year, month, day) {
+  const utcTarget = Date.UTC(year, month - 1, day);
+  const utcEpoch = Date.UTC(1899, 11, 30);
+  return Math.round((utcTarget - utcEpoch) / 86400000);
+}
+function toNum(s) {
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+function colLetter(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+function buildSheetXml(rows) {
+  let cols = '<cols>';
+  COLUMN_WIDTHS.forEach((w, i) => { cols += `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`; });
+  cols += '</cols>';
+
+  let sheetData = '<sheetData><row r="1">';
+  HEADERS.forEach((h, i) => {
+    const ref = colLetter(i + 1) + '1';
+    const hStyle = HEADER_STYLE[i + 1] || 1;
+    sheetData += `<c r="${ref}" s="${hStyle}" t="inlineStr"><is><t xml:space="preserve">${esc(h)}</t></is></c>`;
+  });
+  sheetData += '</row>';
+
+  rows.forEach((row, idx) => {
+    const rIdx = idx + 2;
+    const [desc, color, artnum] = parseMaterial(row['Material Description']);
+    const dd = parseDeliveryDate(row['Delivery Date']);
+    const yrmonth = dd ? excelSerialDate(dd.year, dd.month, 1) : null;
+
+    const rowValues = [
+      row['Business Unit'] || '',
+      toNum(row['PO Number']),
+      toNum(row['Vendor Code']),
+      row['Vendor Name'] || '',
+      row['Style Code'] || '',
+      color,
+      row['Size'] || '',
+      '', '',
+      desc,
+      yrmonth,
+      toNum(row['MRP']),
+      toNum(row['EAN']),
+      toNum(artnum),
+      toNum(row['Article Qty']),
+      row['Segment'] || '',
+      row['Family'] || '',
+      row['Brick'] || '',
+      '',
+      row['Fashion Grade'] || '',
+      ''
+    ];
+
+    sheetData += `<row r="${rIdx}">`;
+    rowValues.forEach((val, i) => {
+      const colI = i + 1;
+      const ref = colLetter(colI) + rIdx;
+      const style = COL_STYLE[colI] || 2;
+      if (val === '' || val === null || val === undefined) {
+        sheetData += `<c r="${ref}" s="${style}"/>`;
+      } else if (typeof val === 'number') {
+        sheetData += `<c r="${ref}" s="${style}"><v>${val}</v></c>`;
+      } else {
+        sheetData += `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${esc(val)}</t></is></c>`;
+      }
+    });
+    sheetData += '</row>';
+  });
+  sheetData += '</sheetData>';
+
+  const lastRow = rows.length + 1;
+  const lastCol = colLetter(HEADERS.length);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1:${lastCol}${lastRow}"/>
+<sheetViews><sheetView workbookViewId="0"/></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+${cols}
+${sheetData}
+</worksheet>`;
+}
+
+const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="mm/yyyy"/></numFmts>
+<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="2">
+<border><left/><right/><top/><bottom/><diagonal/></border>
+<border><left style="thin"><color indexed="64"/></left><right style="thin"><color indexed="64"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color indexed="64"/></bottom><diagonal/></border>
+</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="10">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/>
+<xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+const WORKBOOK_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`;
+
+const WORKBOOK_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+/* ===================== Minimal ZIP writer (stored/uncompressed, no dependencies) ===================== */
+function makeCRCTable() {
+  const t = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+}
+const CRC_TABLE = makeCRCTable();
+function crc32(bytes) {
+  let crc = 0 ^ (-1);
+  for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ bytes[i]) & 0xFF];
+  return (crc ^ (-1)) >>> 0;
+}
+function u16(n) { return [n & 0xFF, (n >>> 8) & 0xFF]; }
+function u32(n) { return [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF]; }
+function concatBytes(arrays) {
+  let total = 0;
+  for (const a of arrays) total += a.length;
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const a of arrays) { out.set(a, pos); pos += a.length; }
+  return out;
+}
+function buildZip(files) {
+  const encoder = new TextEncoder();
+  let localParts = [], centralParts = [], offset = 0;
+  const dosTime = 0, dosDate = 0x21;
+
+  for (const f of files) {
+    const nameBytes = encoder.encode(f.name);
+    const data = f.data;
+    const crc = crc32(data);
+    const size = data.length;
+
+    const localHeader = new Uint8Array([
+      0x50, 0x4b, 0x03, 0x04, 20, 0, 0, 0, 0, 0,
+      ...u16(dosTime), ...u16(dosDate),
+      ...u32(crc), ...u32(size), ...u32(size),
+      ...u16(nameBytes.length), 0, 0
+    ]);
+    localParts.push(localHeader, nameBytes, data);
+
+    const centralHeader = new Uint8Array([
+      0x50, 0x4b, 0x01, 0x02, 20, 0, 20, 0, 0, 0, 0, 0,
+      ...u16(dosTime), ...u16(dosDate),
+      ...u32(crc), ...u32(size), ...u32(size),
+      ...u16(nameBytes.length), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      ...u32(offset)
+    ]);
+    centralParts.push(centralHeader, nameBytes);
+
+    offset += localHeader.length + nameBytes.length + data.length;
+  }
+
+  const centralStart = offset;
+  const centralSize = centralParts.reduce((a, p) => a + p.length, 0);
+  const eocd = new Uint8Array([
+    0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0,
+    ...u16(files.length), ...u16(files.length),
+    ...u32(centralSize), ...u32(centralStart), 0, 0
+  ]);
+
+  return concatBytes([...localParts, ...centralParts, eocd]);
+}
+
+function buildXlsx(rows) {
+  const encoder = new TextEncoder();
+  const sheetXml = buildSheetXml(rows);
+  const files = [
+    { name: '[Content_Types].xml', data: encoder.encode(CONTENT_TYPES) },
+    { name: '_rels/.rels', data: encoder.encode(ROOT_RELS) },
+    { name: 'xl/workbook.xml', data: encoder.encode(WORKBOOK_XML) },
+    { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(WORKBOOK_RELS) },
+    { name: 'xl/styles.xml', data: encoder.encode(STYLES_XML) },
+    { name: 'xl/worksheets/sheet1.xml', data: encoder.encode(sheetXml) },
+  ];
+  return buildZip(files);
+}
+</script>
+</body>
+</html>
