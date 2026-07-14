@@ -78,7 +78,7 @@
 
     <footer>
       Rows sharing the same Style Code + Color + Size are collapsed into a single line;
-      tag Qty is the sum across them, and garment po number lists every PO that rolled in.
+      tag Qty is the sum across them, and garment po number keeps one randomly picked PO from that group.
       Mapping: Format←Business Unit, supplier id←Vendor Code,
       Color/Desc/Article Number parsed from Material Description, Yrmonth from Delivery Date.
       Metsize, Label Type, Fashion grade (code), and usp are left blank (not present in the source export).
@@ -202,16 +202,17 @@ const COLUMN_WIDTHS = [6.83, 17.16, 8.43, 36.66, 22.33, 17.16, 8.43, 10.0, 32.5,
 //   3 = plain (border only), 4 = integer "0", 5 = float "#,##0.00",
 //   6 = centered text, 7 = left/center (Metsize only), 8 = centered integer (tag Qty),
 //   9 = centered date "mm/yyyy" (Yrmonth)
-// Column 2 (garment po number) is style 3 (plain/text) rather than the integer style,
-// since a collapsed row can list multiple comma-separated PO numbers.
 const COL_STYLE = {
-  1: 3, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3,
+  1: 3, 2: 4, 3: 3, 4: 3, 5: 3, 6: 3,
   7: 6, 8: 7, 9: 6, 10: 3, 11: 9, 12: 5, 13: 4, 14: 4,
   15: 8, 16: 6, 17: 6, 18: 6, 19: 6, 20: 6, 21: 3
 };
 // Header style per 1-based column: all centered except the last column (U), which matches
 // the original template's un-centered header cell.
 const HEADER_STYLE = { 21: 2 };
+
+// Vendor Name is always forced to this value, regardless of what the source CSV contains.
+const VENDOR_NAME_OVERRIDE = "UNITED TEXTILE MILLS PRIVATE LIMITED";
 
 function parseMaterial(desc) {
   desc = desc || '';
@@ -293,16 +294,15 @@ function buildSheetXml(rows) {
     const row = g.first;
     const dd = parseDeliveryDate(row['Delivery Date']);
     const yrmonth = dd ? excelSerialDate(dd.year, dd.month, 1) : null;
-    const poList = g.poNumbers
-      .slice()
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      .join(', ');
+    const randomPo = g.poNumbers.length
+      ? g.poNumbers[Math.floor(Math.random() * g.poNumbers.length)]
+      : '';
 
     const rowValues = [
       row['Business Unit'] || '',
-      poList,
+      toNum(randomPo),
       toNum(row['Vendor Code']),
-      row['Vendor Name'] || '',
+      VENDOR_NAME_OVERRIDE,
       g.styleCode,
       g.color,
       g.size,
